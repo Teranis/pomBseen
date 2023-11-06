@@ -1,18 +1,25 @@
 [build-system]
-requires = ["setuptools"]
+requires = [
+  "setuptools>=45",
+  "wheel",
+  "setuptools_scm[toml]>=6.2"
+]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools_scm]
+write_to = "pombseen/_version.py"
+
 [project]
-name = "pomBseen"
-version = "0.0.2"
+name = "pombseen"
 authors = [
     {name = "Timon Stegmaier", email = "timonst2000@gmail.com"},
 ]
+dynamic = ["version"]
 readme = "README.md"
 dependencies = [
     "numpy",
     "scikit-image",
 ]
-description = "pomBseen segmentation for Cell-ACDC"
+description = "Python implementation of pomBseen"
 requires-python = ">=3.9"
 license = {text = "BSD-3-Clause"}
