@@ -83,34 +83,51 @@ def pomBseg(image, sharpen_image, radius, amount, block_size, offset, footprint,
 
     return CC_filtered2
 
-def showquick(img):
+def show_quick(imgs):
+    num = len(imgs)
+
     import matplotlib.pyplot as plt
-    plt.imshow(img, cmap='viridis')
-    plt.colorbar()
+    fig = plt.figure()
+    ax = fig.add_subplot(1, num, 1)
+    ax.axis('off')
+    ax.imshow(imgs[0], cmap='viridis')
+ 
+
+
+    for i, img in enumerate(imgs[1:]):
+        i+=2
+        fig.add_subplot(1, num, i, sharex=ax, sharey=ax)
+        plt.axis('off')
+        plt.imshow(img, cmap='viridis')
+    
+
     plt.show()
 
 def pomBsegNuc():
     from PIL import Image
     import os
-    img = Image.open(os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._1.ome.tif"))
+    img = Image.open(os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._4.ome.tif"))
     seg = np.load(os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._1.ome_segm.npz"))
+    save_path = os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._1.ome_segm_nuc.npz")
     seg = seg['arr_0']
-    offset = 15
+    offset = 0
     connectivity = 1
     min_size = 0
     max_size = 1000
     show_count = 0
 
+    print(img.size, seg.shape)
     background_label = 0
     CC_filtered = np.zeros_like(seg)
     unique_labels = np.unique(seg)
     for label in unique_labels:
-        if label == 0: # skip 0 background
+        if label == background_label: # skip background
             continue
+
         cell = np.where(seg == label, 1, 0) # create mask for a cell
         masked_image = np.multiply(img, cell) # apply mask
-        # masked_image[masked_image == 0] = np.nan # for no so otsu ignores all 0
-        hist, bins = np.histogram(masked_image, bins=np.linspace(masked_image.min(), masked_image.max(), 127))
+        unique_pix_num = len(np.unique(masked_image))
+        hist, bins = np.histogram(masked_image, bins=np.linspace(masked_image.min(), masked_image.max(), unique_pix_num))
         hist = hist[1:]
         thresh = filters.threshold_otsu(masked_image, hist=hist) # get threshold
         thresh += offset # apply offset
@@ -120,22 +137,29 @@ def pomBsegNuc():
         unique_labels_cell, label_counts_cell = np.unique(CC[CC != background_label], return_counts=True)
         max_val = np.max(label_counts_cell)
         unique_labels_cell_max = unique_labels_cell[(label_counts_cell >= min_size) & (label_counts_cell <= max_size) & (label_counts_cell == max_val)]
+######################################################
         if unique_labels_cell_max.size == 0:
             print(f'Found no nucleus in cell')
             show_count += 1
             if show_count <= 10:
-                showquick(binary_img)
+                show_quick((binary_img, masked_image))
+######################################################
         else:
             try:
-                CC_filtered[CC == unique_labels_cell_max] = CC[CC == unique_labels_cell_max]
+                CC_filtered[CC == unique_labels_cell_max] = label
             except:
                 print('This didnt work')
+######################################################
                 show_count += 1
                 if show_count <= 10:
-                    showquick(binary_img)
+                    show_quick((binary_img, masked_image))
 
-    showquick(CC_filtered)
-
+    
+    CC_filtered_show = CC_filtered.copy()
+    CC_filtered_show[CC_filtered_show != 0] = 1
+    show_quick((img, CC_filtered_show))
+    np.savez(save_path, arr_0=CC_filtered)
+######################################################
 
 
 pomBsegNuc()
