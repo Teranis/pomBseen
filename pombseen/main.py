@@ -4,8 +4,15 @@ from skimage.segmentation import clear_border as sk_clear_border
 from skimage.morphology import binary_dilation, remove_small_objects, binary_closing
 from skimage.util import invert
 from skimage.filters import unsharp_mask
-from scipy import ndimage
 
+def norm_img(img): # norms it to 0 to 1
+    img_min = min(img)
+    img = img-img_min
+    img_max = max(img)  
+    img = img/img_max
+    print(img_min, img_max)
+    return img
+    
 def import_image(image, radius, amount):# this performs the operations which are in this function other than importing
     image = unsharp_mask(image, radius=radius, amount=amount, preserve_range=True) # sharpen image using unsharp mask
     return image
@@ -72,6 +79,7 @@ def convex_filter(image, connectivity, ConvexFilterSlope, ConvexFilterIntercept,
     return CC_filtered1, CC_filtered2
 
 def pomBseg(image, sharpen_image, radius, amount, block_size, offset, footprint, inverse_bw_max_pix, connectivity, clear_border_conn, clear_border_max_pix, ConvexFilterSlope, ConvexFilterIntercept, min_size, max_size):
+    image = norm_img(image)
     if sharpen_image == True:
         sharpened_image = import_image(image, radius, amount) # sharpen image
     else:
@@ -92,74 +100,77 @@ def show_quick(imgs):
     ax.axis('off')
     ax.imshow(imgs[0], cmap='viridis')
  
-
-
     for i, img in enumerate(imgs[1:]):
         i+=2
         fig.add_subplot(1, num, i, sharex=ax, sharey=ax)
         plt.axis('off')
         plt.imshow(img, cmap='viridis')
     
-
     plt.show()
 
 def pomBsegNuc():
     from PIL import Image
     import os
-    img = Image.open(os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._4.ome.tif"))
-    seg = np.load(os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._1.ome_segm.npz"))
-    save_path = os.path.abspath(r"C:\Users\timon\Documents\Position_1\Images\Stack._1.ome_segm_nuc.npz")
+    img = Image.open(os.path.abspath(r"C:\Users\SchmollerLab\Documents\Timon\pomBseen_test\Position_1\Images\test_flu.tif"))
+    seg = np.load(os.path.abspath(r"C:\Users\SchmollerLab\Documents\Timon\pomBseen_test\Position_1\Images\test_segm.npz"))
+    save_path = os.path.abspath(r"C:\Users\SchmollerLab\Documents\Timon\pomBseen_test\Position_1\Images\test_flu_segm.npz")
     seg = seg['arr_0']
     offset = 0
     connectivity = 1
     min_size = 0
     max_size = 1000
-    show_count = 0
+    max_nuclei = 2
 
-    print(img.size, seg.shape)
+    show_count = 0
     background_label = 0
-    CC_filtered = np.zeros_like(seg)
-    unique_labels = np.unique(seg)
-    for label in unique_labels:
+    id = 1
+    
+    CC_filtered = np.zeros_like(seg) # initiate new img
+    unique_labels = np.unique(seg) # get cell ids 
+    for label in unique_labels: # iterate over cells 
         if label == background_label: # skip background
             continue
 
         cell = np.where(seg == label, 1, 0) # create mask for a cell
         masked_image = np.multiply(img, cell) # apply mask
-        unique_pix_num = len(np.unique(masked_image))
-        hist, bins = np.histogram(masked_image, bins=np.linspace(masked_image.min(), masked_image.max(), unique_pix_num))
-        hist = hist[1:]
-        thresh = filters.threshold_otsu(masked_image, hist=hist) # get threshold
+        unique_pix_num = len(np.unique(masked_image)) # get number of unique pixel number for bins 
+        hist, bins = np.histogram(masked_image, bins=np.linspace(masked_image.min(), masked_image.max(), unique_pix_num)) # bin img 
+        hist = hist[1:] # cut out 0
+        thresh = filters.threshold_otsu(hist=hist) # get threshold
         thresh += offset # apply offset
-        binary_img = masked_image > thresh
+        binary_img = masked_image > thresh # apply thresh
 
         CC = measure.label(binary_img, connectivity=connectivity) # segment
-        unique_labels_cell, label_counts_cell = np.unique(CC[CC != background_label], return_counts=True)
-        max_val = np.max(label_counts_cell)
-        unique_labels_cell_max = unique_labels_cell[(label_counts_cell >= min_size) & (label_counts_cell <= max_size) & (label_counts_cell == max_val)]
+        unique_labels_cell, label_counts_cell = np.unique(CC[CC != background_label], return_counts=True) # get segmentation areas and sizes
+        max_vals = np.sort(label_counts_cell)[-max_nuclei:] # get the max_nuclei-largest ones
+        unique_labels_cell_max = unique_labels_cell[(label_counts_cell >= min_size) & (label_counts_cell <= max_size) & (np.isin(label_counts_cell, max_vals))] # filter for the largest ones, which are in the size bracket
 ######################################################
-        if unique_labels_cell_max.size == 0:
-            print(f'Found no nucleus in cell')
-            show_count += 1
-            if show_count <= 10:
-                show_quick((binary_img, masked_image))
+        if unique_labels_cell_max.size == 0: # ignore cells which dont have any applicable seg areas and show user warning
+            print(f'Found no nucleus in cell {label}')
+            # show_count += 1
+            # if show_count <= 10:
+            #     show_quick((binary_img, masked_image))
 ######################################################
         else:
             try:
-                CC_filtered[CC == unique_labels_cell_max] = label
+                for nuc in unique_labels_cell_max: # iterate over seg areas ids and assign them a unique ID in new img
+                    CC_filtered[CC == nuc] = id
+                    id += 1
             except:
-                print('This didnt work')
+                print(f'Error: failed to apply seg for cell {label}') # this gave a few errors, so here is some debug help
+                print(CC.shape, CC_filtered.shape, unique_labels_cell_max, (np.isin(CC, unique_labels_cell_max)).shape)
+
 ######################################################
-                show_count += 1
-                if show_count <= 10:
-                    show_quick((binary_img, masked_image))
+                # show_count += 1
+                # if show_count <= 10:
+                #     show_quick((binary_img, masked_image))
 
     
     CC_filtered_show = CC_filtered.copy()
     CC_filtered_show[CC_filtered_show != 0] = 1
-    show_quick((img, CC_filtered_show))
+    show_quick((img, CC_filtered_show)) 
     np.savez(save_path, arr_0=CC_filtered)
 ######################################################
 
 
-pomBsegNuc()
+# pomBsegNuc()
