@@ -1,9 +1,10 @@
 from skimage import filters, measure
 import numpy as np
 from skimage.segmentation import clear_border as sk_clear_border
-from skimage.morphology import binary_dilation, remove_small_objects, binary_closing
+from skimage.morphology import binary_dilation, remove_small_objects, binary_closing, convex_hull_image
 from skimage.util import invert
 from skimage.filters import unsharp_mask
+debug = False
 
 def norm_img(img): # norms it to 0 to 1
     img_min = np.min(img)
@@ -20,30 +21,30 @@ def import_image(image, radius, amount):# this performs the operations which are
     image = unsharp_mask(image, radius=radius, amount=amount, preserve_range=True) # sharpen image using unsharp mask
     return image
 
-def thresh_binarize(image, block_size, offset, footprint, inverse_bw_max_pix, connectivity): # threshold and binarize image, also includes halo improvements
+def thresh_binarize(image, block_size, offset, footprint, min_pix_thresh_binarize, connectivity_remove_small_objects_binarize): # threshold and binarize image, also includes halo improvements
     adaptive_threshold = filters.threshold_local(image, block_size=block_size, offset=offset)  # make adaptive threshold
     image = image > adaptive_threshold
 
     image = binary_dilation(image, footprint=footprint) # these all all build in skimage functions. For details see skimage documentation online
-    image = remove_small_objects(image, min_size=inverse_bw_max_pix, connectivity=connectivity)
+    image = remove_small_objects(image, min_size=min_pix_thresh_binarize, connectivity=connectivity_remove_small_objects_binarize)
     image = binary_closing(image, footprint=footprint)
 
     return image
 
-def inverse_bw(image, inverse_bw_max_pix, connectivity): # inverses pictures, cleans pic
-    image = remove_small_objects(image, min_size=inverse_bw_max_pix, connectivity=connectivity) # these all all build in skimage functions. For details see skimage documentation online
+def inverse_bw(image, min_pix_inverse_bw, min_pix_inverted_inverse_bw, connectivity_remove_small_objects_inverse_bw): # inverses pictures, cleans pic
+    image = remove_small_objects(image, min_size=min_pix_inverse_bw, connectivity=connectivity_remove_small_objects_inverse_bw) # these all all build in skimage functions. For details see skimage documentation online
     imageInverse1 = invert(image)
-    imageInverse2 = remove_small_objects(imageInverse1, min_size=inverse_bw_max_pix, connectivity=connectivity)
+    imageInverse2 = remove_small_objects(imageInverse1, min_size=min_pix_inverted_inverse_bw, connectivity=connectivity_remove_small_objects_inverse_bw)
     return imageInverse1, imageInverse2
 
-def clear_border(image, clear_border_conn, clear_border_max_pix):
-    image = sk_clear_border(image, clear_border_conn) # clearing all pixels touching the edge
+def clear_border(image, clear_border_buffer, clear_border_max_pix):
+    image = sk_clear_border(image, buffer_size=clear_border_buffer) # clearing all pixels touching the edge
     image = remove_small_objects(image, clear_border_max_pix) # Remove small objects, the ones which might have been created from removing borders
     return image
 
-def convex_filter(image, connectivity, ConvexFilterSlope, ConvexFilterIntercept, min_size, max_size):
+def convex_filter(image, connectivity_label, convex_filter_slope, convex_filter_intercept, min_size, max_size):
 
-    CC = measure.label(image, connectivity=connectivity) # label objects
+    CC = measure.label(image, connectivity=connectivity_label) # label objects
 
     unique_labels, label_counts = np.unique(CC, return_counts=True) # get labels and with how many pixels they are associated with
     valid_labels = unique_labels[(label_counts >= min_size) & (label_counts <= max_size)] # filter out labels which have too many/ too little pixels
@@ -71,7 +72,7 @@ def convex_filter(image, connectivity, ConvexFilterSlope, ConvexFilterIntercept,
 
     area_ratio = convex_area / area # perform calculations (This should be the same as was done in matlab)
     aspect_ratio = major_axis_length / minor_axis_length
-    y_values = (ConvexFilterSlope * area_ratio) - ConvexFilterIntercept
+    y_values = (convex_filter_slope * area_ratio) - convex_filter_intercept
     label_mask = aspect_ratio > y_values
     valid_labels = label[label_mask]
 
@@ -81,19 +82,22 @@ def convex_filter(image, connectivity, ConvexFilterSlope, ConvexFilterIntercept,
     
     return CC_filtered1, CC_filtered2
 
-def pomBseg(image, sharpen_image, radius, amount, block_size, offset, footprint, inverse_bw_max_pix, connectivity, clear_border_conn, clear_border_max_pix, ConvexFilterSlope, ConvexFilterIntercept, min_size, max_size):
-    image = norm_img(image)
-    if sharpen_image == True:
-        sharpened_image = import_image(image, radius, amount) # sharpen image
-    else:
-        sharpened_image = image
-    offset = offset / 100
-    binary_image = thresh_binarize(sharpened_image, block_size, offset, footprint, inverse_bw_max_pix, connectivity) # threshold image
-    imageInverse1, imageInverse2 = inverse_bw(binary_image, inverse_bw_max_pix, connectivity) # invert image and remove small areas from inside cells and from background
-    imageFiltered = clear_border(imageInverse2, clear_border_conn, clear_border_max_pix) # clearing edge bordering cells
-    CC_filtered1, CC_filtered2 = convex_filter(imageFiltered, connectivity, ConvexFilterSlope, ConvexFilterIntercept, min_size, max_size) # convex and size filter
+def apply_convex_hull_foo(img):
+    rp = measure.regionprops(img)
+    img_hulls = np.zeros_like(img)
+    for prop in rp:
+        prop_img = prop.image
+        hull = convex_hull_image(prop_img)
+        if (img_hulls[prop.slice][hull > 0] == 0).all():
+            img_hulls[prop.slice][hull > 0] = prop.label
+            if debug:
+                print(f'Convex hull applied to cell {prop.label}')
+        else:
+            img_hulls[prop.slice][prop_img > 0] = prop.label
+            if debug:
+                print(f'Convex hull NOT applied to cell {prop.label}')
 
-    return CC_filtered2
+    return img_hulls
 
 def show_quick(imgs):
     num = len(imgs)
@@ -112,10 +116,46 @@ def show_quick(imgs):
     
     plt.show()
 
+def pomBseg(image, 
+            sharpen_image, 
+            radius, 
+            amount, 
+            block_size, 
+            offset, 
+            footprint,
+            min_pix_inverse_bw,
+            min_pix_inverted_inverse_bw, 
+            min_pix_thresh_binarize, 
+            connectivity_remove_small_objects_inverse_bw, 
+            connectivity_label, 
+            connectivity_remove_small_objects_binarize, 
+            clear_border_buffer, 
+            clear_border_max_pix, 
+            convex_filter_slope, 
+            convex_filter_intercept, 
+            min_size, 
+            max_size,
+            apply_convex_hull,
+            ):
+    image = norm_img(image)
+    if sharpen_image == True:
+        sharpened_image = import_image(image, radius, amount) # sharpen image
+    else:
+        sharpened_image = image
+    offset = offset / 100
+    binary_image = thresh_binarize(sharpened_image, block_size, offset, footprint, min_pix_thresh_binarize, connectivity_remove_small_objects_binarize) # threshold image
+    imageInverse1, imageInverse2 = inverse_bw(binary_image, min_pix_inverse_bw, min_pix_inverted_inverse_bw, connectivity_remove_small_objects_inverse_bw) # invert image and remove small areas from inside cells and from background
+    imageFiltered = clear_border(imageInverse2, clear_border_buffer, clear_border_max_pix) # clearing edge bordering cells
+    CC_filtered1, CC_filtered2 = convex_filter(imageFiltered, connectivity_label, convex_filter_slope, convex_filter_intercept, min_size, max_size) # convex and size filter
+    if apply_convex_hull == True:
+        CC_filtered2 = apply_convex_hull_foo(CC_filtered2) # applies a convex hull to the cells
+    return CC_filtered2
+
 def pomBsegNuc(image, seg, connectivity, offset, min_size, max_size, max_nuclei, rel_size_max):
 
     id = 1
     background_label = 0
+    labels_no_nuc = []
 
     image = norm_img(image)
     CC_filtered = np.zeros_like(seg) # initiate new img
@@ -144,8 +184,8 @@ def pomBsegNuc(image, seg, connectivity, offset, min_size, max_size, max_nuclei,
             & (np.isin(label_counts_cell, max_vals))
             & (label_counts_cell <= rel_size_max * count)
             ] # filter for the largest ones, which are in the size bracket
-        if unique_labels_cell_max.size == 0: # ignore cells which dont have any applicable seg areas and show user warning
-            print(f'Found no nucleus in cell {label}')
+        if unique_labels_cell_max.size == 0: # ignore cells which dont have any applicable seg areas and add to list to show user warning later
+            labels_no_nuc.append(label)    
         else:
             try:
                 for nuc in unique_labels_cell_max: # iterate over seg areas ids and assign them a unique ID in new img
@@ -154,4 +194,6 @@ def pomBsegNuc(image, seg, connectivity, offset, min_size, max_size, max_nuclei,
             except:
                 print(f'Error: failed to apply seg for cell {label}') # this gave a few errors, so here is some debug help
                 print(CC.shape, CC_filtered.shape, unique_labels_cell_max, (np.isin(CC, unique_labels_cell_max)).shape)
+                
+    print(f'Found no nucleus in cells: {labels_no_nuc}')
     return CC_filtered
