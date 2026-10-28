@@ -151,49 +151,88 @@ def pomBseg(image,
         CC_filtered2 = apply_convex_hull_foo(CC_filtered2) # applies a convex hull to the cells
     return CC_filtered2
 
-def pomBsegNuc(image, seg, connectivity, offset, min_size, max_size, max_nuclei, rel_size_max):
-
+def pomBsegNuc(
+    image,
+    seg,
+    connectivity,
+    offset,
+    min_size,
+    max_size,
+    max_nuclei,
+    rel_size_max,
+):
     id = 1
     background_label = 0
     labels_no_nuc = []
 
     image = norm_img(image)
-    CC_filtered = np.zeros_like(seg) # initiate new img
-    unique_labels, counts = np.unique(seg, return_counts=True) # get cell ids 
-    for label, count in zip(unique_labels, counts): # iterate over cells 
-        if label == background_label: # skip background
+    offset = offset / 100
+
+    CC_filtered = np.zeros_like(seg, dtype=np.uint32)
+
+    unique_labels, counts = np.unique(seg, return_counts=True)
+
+    for label, count in zip(unique_labels, counts):
+        if label == background_label: # skip background label
             continue
 
-        cell = np.where(seg == label, 1, 0) # create mask for a cell
-        masked_image = np.multiply(image, cell) # apply mask
-        unique_pix_num = len(np.unique(masked_image)) # get number of unique pixel number for bins
-        hist, bins = np.histogram(masked_image, bins=np.linspace(masked_image.min(), masked_image.max(), unique_pix_num)) # bin img
-        hist = hist[1:] # cut out 0
-        bins = bins[1:]
-        thresh = filters.threshold_otsu(image, hist=(hist, bins)) # get threshold
-        offset = offset / 100
-        thresh += offset # apply offset
-        binary_img = masked_image > thresh # apply thresh
+        cell_mask = seg == label
+        cell_pixels = image[cell_mask]
 
-        CC = measure.label(binary_img, connectivity=connectivity) # segment
-        unique_labels_cell, label_counts_cell = np.unique(CC[CC != background_label], return_counts=True) # get segmentation areas and sizes
-        max_vals = np.sort(label_counts_cell)[-max_nuclei:] # get the max_nuclei-largest ones
-        unique_labels_cell_max = unique_labels_cell[
-            (label_counts_cell >= min_size) 
-            & (label_counts_cell <= max_size) 
-            & (np.isin(label_counts_cell, max_vals))
+        # Skip empty cells or cells without intensity variation
+        if cell_pixels.size == 0:
+            labels_no_nuc.append(label)
+            continue
+
+        if cell_pixels.min() == cell_pixels.max():
+            labels_no_nuc.append(label)
+            continue
+
+        # Calculate Otsu threshold using only pixels inside this cell
+        thresh = filters.threshold_otsu(cell_pixels)
+        thresh += offset
+
+        # Threshold only within the current cell
+        binary_img = cell_mask & (image > thresh)
+
+        # Label connected components
+        CC = measure.label(
+            binary_img,
+            connectivity=connectivity,
+            background=0,
+        )
+
+        # Get component IDs and sizes, excluding background
+        unique_labels_cell, label_counts_cell = np.unique(
+            CC[CC != background_label],
+            return_counts=True,
+        )
+
+        if unique_labels_cell.size == 0:
+            labels_no_nuc.append(label)
+            continue
+
+        # Keep only the largest max_nuclei components as candidates
+        max_vals = np.sort(label_counts_cell)[-max_nuclei:]
+
+        valid = (
+            (label_counts_cell >= min_size)
+            & (label_counts_cell <= max_size)
+            & np.isin(label_counts_cell, max_vals)
             & (label_counts_cell <= rel_size_max * count)
-            ] # filter for the largest ones, which are in the size bracket
-        if unique_labels_cell_max.size == 0: # ignore cells which dont have any applicable seg areas and add to list to show user warning later
-            labels_no_nuc.append(label)    
-        else:
-            try:
-                for nuc in unique_labels_cell_max: # iterate over seg areas ids and assign them a unique ID in new img
-                    CC_filtered[CC == nuc] = id
-                    id += 1
-            except:
-                print(f'Error: failed to apply seg for cell {label}') # this gave a few errors, so here is some debug help
-                print(CC.shape, CC_filtered.shape, unique_labels_cell_max, (np.isin(CC, unique_labels_cell_max)).shape)
-                
-    print(f'Found no nucleus in cells: {labels_no_nuc}')
+        )
+
+        unique_labels_cell_max = unique_labels_cell[valid]
+
+        if unique_labels_cell_max.size == 0:
+            labels_no_nuc.append(label)
+            continue
+
+        # Assign globally unique IDs to the selected nuclei
+        for nuc in unique_labels_cell_max:
+            CC_filtered[CC == nuc] = id
+            id += 1
+
+    print(f"Found no nucleus in cells: {labels_no_nuc}")
+
     return CC_filtered
